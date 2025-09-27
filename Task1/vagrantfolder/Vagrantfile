@@ -1,0 +1,51 @@
+# -*- mode: ruby -*-
+# vi: set ft=ruby :
+# Magic-переменная окружения, которая укажет сервер, где хранятся боксы для Vagrant (обходим блокировку)
+ENV['VAGRANT_SERVER_URL'] = 'https://vagrant.elab.pro'
+# Название Box-а. Брать отсюда - https://vagrant.elab.pro/downloads/
+BoxName = "bento/ubuntu-24.04"
+# Название провайдера. По умолчанию -- VirtualBox
+Provider = "virtualbox"
+# Путь до публичного ключа. Генерируется через утилиту ssh-keygen
+SSH_PUB_KEY = "./lab.pub"
+# Vagrantfile поддерживает синтаксис Ruby, создаем структуру, которая описывает наши виртуальные машины
+VirtMachine = Struct.new(:name, :ip, :cpus, :memory)
+# Объект VM для виртуальной машины с Ansible
+ansible = VirtMachine.new("ansible-host", "10.10.10.20", 2, 2048)
+# Объект VM для Worker, где будет исполняться код
+worker = VirtMachine.new("task-service", "10.10.10.30", 4, 2048)
+# Делаем список из двух наших объектов - виртуальных машин
+vms = [ansible, worker]
+# Определяем глобальный скоуп конфигурации Vagrant (c версией API - 2) и помещаем ее в объект config
+Vagrant.configure("2") do |config|
+# Проходим по каждой виртуальной машине в foreach цикле. Каждая машина в переменной i
+  vms.each do |i|
+    # Определяем в этом блоке настройки виртуальной машины. Объект настроек каждой VM в переменной cfg
+    config.vm.define "#{i.name}" do |cfg|
+      # Имя ВМ
+      cfg.vm.box = "#{BoxName}"
+      # Хостнейм (то что выведется при выводе команды hostname на системе)
+      cfg.vm.hostname = "#{i.name}.local"
+      # Определяем параметры сети. Она у нас будет внутренняя, то есть доступна из хостовой ОС.
+      config.vm.network "private_network", ip: "#{i.ip}"
+
+      # Подкладываем созданный нами заранее SSH ключ (публичную часть) на виртуальную машину, копируя на хост
+      cfg.vm.provision "file", source: "#{SSH_PUB_KEY}",
+      destination: "~/.ssh/ansible_key.pub"
+      # И теперь записываем его в Authorized Keys
+      cfg.vm.provision "shell", inline: <<-SHELL
+      cat /home/vagrant/.ssh/ansible_key.pub >> /home/vagrant/.ssh/authorized_keys
+      SHELL
+
+      # Определяем настройки ВМ, которые зависят от провайдера. Объект настроек в переменной v
+      cfg.vm.provider "#{Provider}" do |v|
+        # Количество доступных для ВМ ядер
+        v.cpus = "#{i.cpus}"
+        # Количество доступной оперативной памяти
+        v.memory = "#{i.memory}"
+        # Имя машины в интерфейсе VirtualBox
+        v.name = "#{i.name}"
+      end
+    end
+  end
+end
